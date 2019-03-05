@@ -18,7 +18,7 @@
  * 
  */
 int main(int argc, char** argv) {
-    printf("This is a TCP chat client");
+    printf("This is a TCP chat server");
     return (EXIT_SUCCESS);
 }
 
