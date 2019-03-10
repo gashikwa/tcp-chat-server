@@ -71,13 +71,6 @@ void *get_in_addr(struct sockaddr *sa) {
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
-int send_instruction(int fd, char* buf, size_t len) {
-    if (send(fd, buf, MAXDATASIZE, 0) == -1) {
-        perror("send");
-    }
-    
-}
-
 void *client_handler(void *_client) { 
     int nbytes;
     client_t* client = (client_t*)_client;
@@ -96,9 +89,6 @@ void *client_handler(void *_client) {
             printf("server: connection on fd %d gracefully closed\n", client->fd);
             break;
         }
-        
-        buf[nbytes] = 0;
-        printf("server: received '%s' on fd%d\n", buf, client->fd);
         
         instruction_t *instruction = (instruction_t *)buf;
         client_t *p = client_list.head;
@@ -127,9 +117,10 @@ void *client_handler(void *_client) {
             case BROADCAST:
                 memcpy(instruction->username, client->username, USERNAME_FIELD_WIDTH);
                 while (p) {
-                    if (send(p->fd, buf, MAXDATASIZE, 0)) {
+                    if (send(p->fd, buf, MAXDATASIZE, 0) == -1) {
                         perror("send");
                     }
+                    p = p->next;
                 }
                 break;
 
@@ -162,14 +153,16 @@ void *client_handler(void *_client) {
                             perror("send");
                         }
                         goto close_connection;
-                    }                            
+                    }
+                    p = p->next;
                 }
                 memcpy(client->username, instruction->username, USERNAME_FIELD_WIDTH);
                 p = client_list.head;
                 while (p) {
-                    if (send(p->fd, buf, MAXDATASIZE, 0)) {
+                    if (send(p->fd, buf, MAXDATASIZE, 0) == -1) {
                         perror("send");
                     }
+                    p = p->next;
                 }
                 break;
                 
