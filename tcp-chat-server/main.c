@@ -26,7 +26,7 @@ typedef struct _client {
     char username[USERNAME_FIELD_WIDTH];
     int fd;
     struct sockaddr_storage addr;
-    struct _client *next;
+    struct _client *next, *prev;
 } client_t;
 
 typedef struct _client_list {
@@ -64,34 +64,43 @@ void *client_handler(void *_client) {
     int nbytes;
     client_t* client = (client_t*)_client;
     char buf[MAXDATASIZE];
+    int rv = 0;
+    int tmpfd;
     
     printf("server: client handler waiting on fd %d\n", client->fd);
     
     while (1) {
         if ((nbytes = recv(client->fd, buf, MAXDATASIZE-1, 0)) == -1) {
             perror("recv");
-            close(client->fd);
-            pthread_exit((void *)-1);
+            rv = -1;
+            break;
         } else if (nbytes == 0) {
             printf("server: connection on fd %d gracefully closed\n", client->fd);
-            close(client->fd);
-            pthread_exit((void *)0);
+            break;
         }
         
         buf[nbytes] = 0;
-        
-        printf("server: received '%s'\n", buf);
+        printf("server: received '%s' on fd%d\n", buf, client->fd);
         
         if (send(client->fd, buf, nbytes, 0) == -1) {
             perror("send");
         } else {
-            printf("server: echoed\n");
-        }
-             
+            printf("server: echoed on fd %d\n", client->fd);
+        }      
     }
- 
-    pthread_exit((void *)-1);
     
+    //remove client from client_list
+    pthread_mutex_lock(&(client_list.mutex));
+    if (client->next) client->next->prev = client->prev;
+    if (client->prev) client->prev->next = client->next;
+    if (client == client_list.head) client_list.head = client->next;
+    pthread_mutex_unlock(&(client_list.mutex));
+    
+    //close fd
+    close((tmpfd = client->fd));
+    
+    printf("server: client handler on fd %d returned %d", tmpfd, rv);
+    pthread_exit((void *)(long)rv);
 }
 
 
@@ -160,7 +169,7 @@ int main(void) {
 
     printf("server: waiting for connections...\n");
 
-    while(1) {  // main accept() loop
+    while (1) {  // main accept() loop
         client_t* client = malloc(sizeof(client_t));
         
         socklen_t sin_size = sizeof (client->addr);
@@ -180,6 +189,8 @@ int main(void) {
         //insert client into client list
         pthread_mutex_lock(&(client_list.mutex));
         client->next = client_list.head;
+        client_list.head->prev = client;
+        client->prev = NULL;
         client_list.head = client;
         pthread_mutex_unlock(&(client_list.mutex));
         
