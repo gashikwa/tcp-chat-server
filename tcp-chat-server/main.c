@@ -146,7 +146,7 @@ void *client_handler(void *_client) {
                 
             case JOIN:
                 //client has already joined
-                if (!client->username[0]) {
+                if (client->username[0]) {
                     instruction->command[0] = ERROR;
                     strcpy(instruction->message, "you have already joined the server");
                     if (send(client->fd, buf, MAXDATASIZE, 0) == -1) {
