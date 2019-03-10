@@ -93,7 +93,7 @@ void *client_handler(void *_client) {
     pthread_mutex_lock(&(client_list.mutex));
     if (client->next) client->next->prev = client->prev;
     if (client->prev) client->prev->next = client->next;
-    if (client == client_list.head) client_list.head = client->next;
+    if (client_list.head == client) client_list.head = client->next;
     pthread_mutex_unlock(&(client_list.mutex));
     
     //close fd
@@ -170,8 +170,9 @@ int main(void) {
     printf("server: waiting for connections...\n");
 
     while (1) {  // main accept() loop
-        client_t* client = malloc(sizeof(client_t));
-        
+        client_t *client = malloc(sizeof(client_t));
+        *client = (client_t) {.next = NULL, .prev = NULL}; 
+
         socklen_t sin_size = sizeof (client->addr);
         client->fd = accept(sockfd, (struct sockaddr *)&client->addr, &sin_size);
         if (client->fd == -1) {
@@ -188,9 +189,10 @@ int main(void) {
         
         //insert client into client list
         pthread_mutex_lock(&(client_list.mutex));
-        client->next = client_list.head;
-        client_list.head->prev = client;
-        client->prev = NULL;
+        if (client_list.head) {
+            client->next = client_list.head;
+            client_list.head->prev = client;
+        }
         client_list.head = client;
         pthread_mutex_unlock(&(client_list.mutex));
         
