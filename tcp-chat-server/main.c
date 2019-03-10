@@ -16,11 +16,22 @@
 
 #define PORT "3490"  // the port users will be connecting to
 #define BACKLOG 10     // how many pending connections queue will hold
-#define MAXDATASIZE 2000
 
-#define COMMAND_FIELD_WIDTH 20
+#define COMMAND_FIELD_WIDTH 1
 #define USERNAME_FIELD_WIDTH 20
-#define MESSAGE_FIELD_WIDTH 100
+#define MESSAGE_FIELD_WIDTH 1000
+
+#define MAX_USERS MESSAGE_FIELD_WIDTH / USERNAME_FIELD_WIDTH
+#define MAXDATASIZE COMMAND_FIELD_WIDTH + USERNAME_FIELD_WIDTH + MESSAGE_FIELD_WIDTH
+
+typedef enum _command {
+    UNICAST = 1,
+    BROADCAST,
+    LIST,
+    EXIT,
+    JOIN,
+    ERROR
+} command_t;
 
 typedef struct _client {
     char username[USERNAME_FIELD_WIDTH];
@@ -60,6 +71,13 @@ void *get_in_addr(struct sockaddr *sa) {
     return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
+int send_instruction(int fd, char* buf, size_t len) {
+    if (send(fd, buf, MAXDATASIZE, 0) == -1) {
+        perror("send");
+    }
+    
+}
+
 void *client_handler(void *_client) { 
     int nbytes;
     client_t* client = (client_t*)_client;
@@ -70,7 +88,7 @@ void *client_handler(void *_client) {
     printf("server: client handler waiting on fd %d\n", client->fd);
     
     while (1) {
-        if ((nbytes = recv(client->fd, buf, MAXDATASIZE-1, 0)) == -1) {
+        if ((nbytes = recv(client->fd, buf, MAXDATASIZE, 0)) == -1) {
             perror("recv");
             rv = -1;
             break;
@@ -82,12 +100,96 @@ void *client_handler(void *_client) {
         buf[nbytes] = 0;
         printf("server: received '%s' on fd%d\n", buf, client->fd);
         
-        if (send(client->fd, buf, nbytes, 0) == -1) {
-            perror("send");
-        } else {
-            printf("server: echoed on fd %d\n", client->fd);
-        }      
+        instruction_t *instruction = (instruction_t *)buf;
+        client_t *p = client_list.head;
+        char *m = instruction->message;
+
+        switch(instruction->command[0]) {
+            case UNICAST:
+                while (p) {
+                    if (memcmp(p->username, instruction->username, USERNAME_FIELD_WIDTH)) {
+                        memcpy(instruction->username, client->username, USERNAME_FIELD_WIDTH);
+                        if (send(p->fd, buf, MAXDATASIZE, 0) == -1) {
+                            perror("send");
+                        }
+                        goto done;
+                    }
+                    p = p->next;
+                }
+                //user not found
+                instruction->command[0] = ERROR;
+                strcpy(instruction->message, "recipient not found");
+                if (send(client->fd, buf, MAXDATASIZE, 0) == -1) {
+                    perror("send");
+                }
+                break;
+                
+            case BROADCAST:
+                memcpy(instruction->username, client->username, USERNAME_FIELD_WIDTH);
+                while (p) {
+                    if (send(p->fd, buf, MAXDATASIZE, 0)) {
+                        perror("send");
+                    }
+                }
+                break;
+
+            case LIST:
+                while (p) {
+                    memcpy(m, instruction->username, USERNAME_FIELD_WIDTH);
+                    p = p->next;
+                    m += USERNAME_FIELD_WIDTH;
+                }
+                if (send(client->fd, buf, MAXDATASIZE, 0) == -1) {
+                    perror("send");
+                }
+                break;
+                
+            case JOIN:
+                //client has already joined
+                if (!client->username[0]) {
+                    instruction->command[0] = ERROR;
+                    strcpy(instruction->message, "you have already joined the server");
+                    if (send(client->fd, buf, MAXDATASIZE, 0) == -1) {
+                        perror("send");
+                    }
+                    goto done;
+                }
+                while (p) {
+                    if (memcmp(p->username, client->username, USERNAME_FIELD_WIDTH)) {
+                        instruction->command[0] = ERROR;
+                        strcpy(instruction->message, "username taken");
+                        if (send(client->fd, buf, MAXDATASIZE, 0) == -1) {
+                            perror("send");
+                        }
+                        goto close_connection;
+                    }                            
+                }
+                memcpy(client->username, instruction->username, USERNAME_FIELD_WIDTH);
+                p = client_list.head;
+                while (p) {
+                    if (send(p->fd, buf, MAXDATASIZE, 0)) {
+                        perror("send");
+                    }
+                }
+                break;
+                
+            case EXIT:
+                goto close_connection;
+                break;
+                
+            default:
+                printf("server: ill-formed instruction from fd %d\n", client->fd);
+                break;
+        }
+        
+        done:
+        
+        continue;
+        
+        
     }
+    
+    close_connection:
     
     //remove client from client_list
     pthread_mutex_lock(&(client_list.mutex));
@@ -171,7 +273,7 @@ int main(void) {
 
     while (1) {  // main accept() loop
         client_t *client = malloc(sizeof(client_t));
-        *client = (client_t) {.next = NULL, .prev = NULL}; 
+        *client = (client_t) {.next = NULL, .prev = NULL, .username = '\0'};        
 
         socklen_t sin_size = sizeof (client->addr);
         client->fd = accept(sockfd, (struct sockaddr *)&client->addr, &sin_size);
