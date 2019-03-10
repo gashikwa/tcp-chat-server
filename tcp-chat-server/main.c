@@ -17,7 +17,7 @@
 #define PORT "3490"  // the port users will be connecting to
 #define BACKLOG 10     // how many pending connections queue will hold
 
-#define COMMAND_FIELD_WIDTH 1
+#define COMMAND_FIELD_WIDTH 4
 #define USERNAME_FIELD_WIDTH 20
 #define MESSAGE_FIELD_WIDTH 1000
 
@@ -46,7 +46,7 @@ typedef struct _client_list {
 } client_list_t;
 
 typedef struct _instruction {
-    char command[COMMAND_FIELD_WIDTH];
+    int command;
     char username[USERNAME_FIELD_WIDTH];
     char message[MESSAGE_FIELD_WIDTH];
 } instruction_t; 
@@ -81,6 +81,7 @@ void *client_handler(void *_client) {
     printf("server: client handler waiting on fd %d\n", client->fd);
     
     while (1) {
+        memset(buf, 0, MAXDATASIZE);
         if ((nbytes = recv(client->fd, buf, MAXDATASIZE, 0)) == -1) {
             perror("recv");
             rv = -1;
@@ -94,11 +95,11 @@ void *client_handler(void *_client) {
         client_t *p = client_list.head;
         char *m = instruction->message;
 
-        switch(instruction->command[0]) {
+        switch(instruction->command) {
             case UNICAST:
                 while (p) {
-                    if (memcmp(p->username, instruction->username, USERNAME_FIELD_WIDTH)) {
-                        memcpy(instruction->username, client->username, USERNAME_FIELD_WIDTH);
+                    if (strcmp(p->username, instruction->username) == 0) {
+                        strcpy(instruction->username, client->username);
                         if (send(p->fd, buf, MAXDATASIZE, 0) == -1) {
                             perror("send");
                         }
@@ -107,7 +108,7 @@ void *client_handler(void *_client) {
                     p = p->next;
                 }
                 //user not found
-                instruction->command[0] = ERROR;
+                instruction->command = ERROR;
                 strcpy(instruction->message, "recipient not found");
                 if (send(client->fd, buf, MAXDATASIZE, 0) == -1) {
                     perror("send");
@@ -115,7 +116,7 @@ void *client_handler(void *_client) {
                 break;
                 
             case BROADCAST:
-                memcpy(instruction->username, client->username, USERNAME_FIELD_WIDTH);
+                strcpy(instruction->username, client->username);
                 while (p) {
                     if (send(p->fd, buf, MAXDATASIZE, 0) == -1) {
                         perror("send");
@@ -126,9 +127,10 @@ void *client_handler(void *_client) {
 
             case LIST:
                 while (p) {
-                    memcpy(m, instruction->username, USERNAME_FIELD_WIDTH);
+                    strcpy(m, p->username);
+                    m += strlen(p->username);
+                    *(m++) = ' ';
                     p = p->next;
-                    m += USERNAME_FIELD_WIDTH;
                 }
                 if (send(client->fd, buf, MAXDATASIZE, 0) == -1) {
                     perror("send");
@@ -138,7 +140,7 @@ void *client_handler(void *_client) {
             case JOIN:
                 //client has already joined
                 if (client->username[0]) {
-                    instruction->command[0] = ERROR;
+                    instruction->command = ERROR;
                     strcpy(instruction->message, "you have already joined the server");
                     if (send(client->fd, buf, MAXDATASIZE, 0) == -1) {
                         perror("send");
@@ -146,8 +148,8 @@ void *client_handler(void *_client) {
                     goto done;
                 }
                 while (p) {
-                    if (memcmp(p->username, client->username, USERNAME_FIELD_WIDTH)) {
-                        instruction->command[0] = ERROR;
+                    if (strcmp(p->username, instruction->username) == 0) {
+                        instruction->command = ERROR;
                         strcpy(instruction->message, "username taken");
                         if (send(client->fd, buf, MAXDATASIZE, 0) == -1) {
                             perror("send");
@@ -156,7 +158,7 @@ void *client_handler(void *_client) {
                     }
                     p = p->next;
                 }
-                memcpy(client->username, instruction->username, USERNAME_FIELD_WIDTH);
+                strcpy(client->username, instruction->username);
                 p = client_list.head;
                 while (p) {
                     if (send(p->fd, buf, MAXDATASIZE, 0) == -1) {
@@ -191,10 +193,12 @@ void *client_handler(void *_client) {
     if (client_list.head == client) client_list.head = client->next;
     pthread_mutex_unlock(&(client_list.mutex));
     
+    free(client);
+    
     //close fd
     close((tmpfd = client->fd));
     
-    printf("server: client handler on fd %d returned %d", tmpfd, rv);
+    printf("server: client handler on fd %d returned %d\n", tmpfd, rv);
     pthread_exit((void *)(long)rv);
 }
 
